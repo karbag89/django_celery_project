@@ -11,6 +11,7 @@ django-celery-results==2.4.0
 djangorestframework==3.14.0
 kombu==5.2.4
 prompt-toolkit==3.0.36
+PyJWT==2.6.0
 pytz==2022.7.1
 six==1.16.0
 sqlparse==0.4.3
