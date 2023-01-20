@@ -40,7 +40,8 @@ INSTALLED_APPS = [
     "celery_app",
     "rest_framework",
     "django_celery_results",
-    "corsheaders"
+    "corsheaders",
+    "storages"
 ]
 
 MIDDLEWARE = [
@@ -123,3 +124,12 @@ CORS_ALLOW_CREDENTIALS = True
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+
+AWS_ACCESS_KEY_ID = "<YOUR_AWS_ACCESS_KEY_ID>"
+AWS_SECRET_ACCESS_KEY = "<YOUR_AWS_SECRET_ACCESS_KEY>"
+AWS_STORAGE_BUCKET_NAME = "<YOUR_AWS_STORAGE_BUCKET_NAME>"
+
+AWS_LOCATION = 'files'
+AWS_S3_CUSTOM_DOMAIN = 's3.console.aws.amazon.com/s3/buckets/%s' % AWS_STORAGE_BUCKET_NAME
+FILE_URL = 'https://%s/%s/' % (AWS_S3_CUSTOM_DOMAIN, AWS_LOCATION)
