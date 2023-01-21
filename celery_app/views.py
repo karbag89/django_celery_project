@@ -2,17 +2,19 @@ import jwt
 import datetime
 import pandas as pd
 
-from celery_project.settings import FILE_URL
+from celery.utils.log import get_logger
 from django.contrib.auth.models import User
-from django.core.files.storage import default_storage
 from django.views.generic.edit import FormView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.exceptions import AuthenticationFailed
 
-from .models import Contacts, FileMetadata
-from .serializers import UserSerializer, ContactSerializer, \
-                         UnprocessedContactsSerializer, FileMetadataSerializer
+from celery_project.settings import WAITING_TIME
+from .models import Contacts, UnprocessedContacts, FileMetadata
+from .serializers import UserSerializer
+from .tasks import (send_file, create_file_metadata,
+                   create_contact, create_unprocessed_contact,
+                   create_task, delete_processed_contacts)
 
 
 # Create your views here.
@@ -21,7 +23,10 @@ class RegisterView(APIView):
         serializer = UserSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
+        username = request.data['username']
+        response = Response()
+        response.data = {"message": f"User with username '{username}' successfully registered."}
+        return response
 
 
 class LoginView(APIView):
@@ -31,11 +36,8 @@ class LoginView(APIView):
 
         user = User.objects.filter(username=username).first()
 
-        if user is None:
-            raise AuthenticationFailed('User not found!')
-
-        if not user.check_password(password):
-            raise AuthenticationFailed('Incorrect password!')
+        if user is None or not user.check_password(password):
+            raise AuthenticationFailed(f"User credentials was incorrect!")
 
         payload = {
             'id': user.id,
@@ -47,9 +49,7 @@ class LoginView(APIView):
 
         response = Response()
         response.set_cookie(key='jwt', value=token, httponly=True)
-        response.data = {
-            'jwt': token
-        }
+        response.data = {"message": f"User successfully logged in."}
         return response
 
 
@@ -57,9 +57,7 @@ class LogoutView(APIView):
     def post(self, request):
         response = Response()
         response.delete_cookie('jwt')
-        response.data = {
-            'message': 'success'
-        }
+        response.data = {"message": f"User successfully logged out."}
         return response
 
 
@@ -72,23 +70,6 @@ class JWTCheck(APIView):
             jwt.decode(token, 'secret', algorithms=['HS256'])
         except jwt.ExpiredSignatureError:
             raise AuthenticationFailed('Unauthentication expired!')
-
-
-def insert_contacts(contacts, model="UnprocessedContacts"):
-    if model == "Contacts":
-        serializer = ContactSerializer(data=contacts)
-    else:
-        serializer = UnprocessedContactsSerializer(data=contacts)
-    serializer.is_valid(raise_exception=True)
-    serializer.save()
-    return Response(serializer.data)
-
-
-def insert_file_metadata(file_metadata):
-    serializer = FileMetadataSerializer(data=file_metadata)
-    serializer.is_valid(raise_exception=True)
-    serializer.save()
-    return Response(serializer.data)
 
 
 class UploadFile(JWTCheck, FormView):
@@ -105,43 +86,58 @@ class UploadFile(JWTCheck, FormView):
             df_contacts = pd.read_excel(file_contacts.file)
             contacts = df_contacts.where(pd.notnull(df_contacts), None)
             contacts = contacts.to_dict(orient='records')
-            
-            # Testing S3 uploading
-            # TODO -> Need to create celery async 1-st job (upload file S3)
-            date_time = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M_%S")
-            s3_file_name = f"{date_time}_{file_name}"
-            s3_path = FILE_URL + s3_file_name
-            default_storage.save(s3_file_name, file_contacts)
 
-            user = User.objects.filter(username=username)
-            file_metadata = {'username': user[0].id,
-                             's3_path': s3_path,}
-            insert_file_metadata(file_metadata) 
-
+            # Upload file to S3
+            s3_file_name = send_file(file_name, file_contacts)
+            # Add file metadata information to db
+            create_file_metadata(username, s3_file_name)
             for contact in contacts:
-                # print("------------------------")
-                # print(contact)
-                # print("------------------------")
                 # TODO -> Read from Contacts DB
-                # contact_data = Contacts.objects.all()
                 contact = {key.lower().replace(" ", "_"): value for key, value in contact.items()}
-                # email_address = Contacts.objects.filter(phone_number=contact["email_address"]).latest('created_date')
                 phone_number_exists = Contacts.objects.filter(phone_number=contact["phone_number"])
                 email_address_exists = Contacts.objects.filter(phone_number=contact["email_address"])
                 if phone_number_exists or email_address_exists:
-                    # TODO -> Need to create celery async 2-nd job
-                    insert_contacts(contact, "UnprocessedContacts")
+                    create_unprocessed_contact(contact)
                     continue
-                # TODO -> Need to create celery async 3-th job
-                insert_contacts(contact, "Contacts")
-            response.data = {
-                "message": "file uploaded!",
-                "data": contacts
-            }
+                if not create_contact(contact):
+                    message = f"Dear user '{username}' please check you input file data. Uploading failed."
+                    return response
+            message = f"Dear user '{username}' thank you for uploading contacts."
+            unprocessed_contacts = list(UnprocessedContacts.objects.all().order_by('created_date'))
+            if len(unprocessed_contacts) > 0:
+                for unprocessed_contact in unprocessed_contacts:
+                    unprocessed_contact_dict = {'name': unprocessed_contact.name, 
+                                                'phone_number': unprocessed_contact.phone_number,
+                                                'email_address': unprocessed_contact.email_address}
+                    unprocessed_contact_date = unprocessed_contact.created_date
+
+                    contacts = Contacts.objects.filter(phone_number=unprocessed_contact.phone_number, 
+                                                    email_address=unprocessed_contact.email_address) \
+                                                .order_by('-created_date').first()
+                    contacts_created_date = contacts.created_date
+                    time_delta = (unprocessed_contact_date - contacts_created_date).total_seconds()
+                    if time_delta >= WAITING_TIME or time_delta < 0:
+                        create_contact(unprocessed_contact_dict)
+                        delete_processed_contacts(unprocessed_contact_dict, unprocessed_contact_date)
+                    else:
+                        logger = get_logger(__name__)
+                        delay = time_delta
+                        try:
+                            task = create_task.apply_async((unprocessed_contact_dict, unprocessed_contact_date, delay), expires=1800, 
+                                                            retry=True,retry_policy={
+                                                                                'max_retries': 3,
+                                                                                'interval_start': 0,
+                                                                                'interval_step': 0.2,
+                                                                                'interval_max': 0.2,
+                                                                            })
+                            task.wait(timeout=None, interval=0.5)
+                        except create_task.OperationalError as exc:
+                            logger.exception('Sending task raised: %r', exc)
+            else:
+                message = f"Dear user '{username}' thank you for uploading contacts."
         else:
-            response.data = {
-                'message': 'file not found!'
-            }
+            message = "File not found!"
+        response.data = {"message": message}
         return response
 
 
@@ -156,7 +152,7 @@ class UserDataView(APIView):
         user_file_info = FileMetadata.objects.filter(username=user[0].id).all().values('s3_path')
         file_info = []
         if not len(user_file_info):
-            response.data = {"message": "You don't have any files uploaded."}
+            response.data = {"message": "You don't have any uploaded files."}
             return response
 
         for info in user_file_info:
