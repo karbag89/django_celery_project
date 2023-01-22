@@ -19,6 +19,7 @@ The original excel file stored in S3.
 ## Database Architecture
 ***
 Excel file upload app database architecture shown below:
+![Database schema](https://user-images.githubusercontent.com/37728875/213930619-f27d50b1-03ee-4113-8b25-7a06051a4607.JPG)
 
 Created 4 tables `Users`, `FileMetadata`, `Contacts` and `UnprocessedContacts`.
 
@@ -44,6 +45,7 @@ After storing 990 contacts to `Contacts` table, the application starts the Celer
 2. [Docker](#docker)
 3. [Postman](#postman)
 4. [AWS](#aws)
+5. [Test](#test)
 
 ### Git
 
@@ -56,6 +58,13 @@ git clone https://github.com/karbag89/django_celery_project
 
 ```
 (app) $ docker-compose up -d --build
+```
+
+**Attention: If after the above command you can see below ERROR,** 
+**please check your internet connection stability and try again**
+```
+Get https://registry-1.docker.io/v2/: net/http: request canceled while waiting 
+for connection (Client.Timeout exceeded while awaiting headers)
 ```
 
 **The result of docker-compose up -d --build shown below:**
@@ -103,7 +112,7 @@ Removing network django_celery_project_default
 
 ### Postman
 
-Please import **`Upload_API.postman_collection.json`** in your postman collections.
+Please import [**`Upload_API.postman_collection.json`**](https://github.com/karbag89/django_celery_project/blob/main/Upload_API.postman_collection.json) in your postman collections.
 
 **Note: After uploading you can fined examples for API endpoints call.**
 
@@ -117,7 +126,7 @@ Please create your AWS S3 bucket and inside the policy set below json informatio
     "Id": "Your_Policy_ID",
     "Statement": [
         {
-            "Sid": "Stmt1674076233251",
+            "Sid": "Your_Sid_ID",
             "Effect": "Allow",
             "Principal": "*",
             "Action": "s3:PutObject",
@@ -137,6 +146,14 @@ After creation of AWS S3 bucket, copy your AWS credentials to project/celery_pro
 **AWS_STORAGE_BUCKET_NAME = "<YOUR_AWS_STORAGE_BUCKET_NAME>"**
 ```
 
+### Test
+
+**To run tests you need to run below docker command.**
+
+```
+docker-compose exec app python -m pytest
+```
+
 ## Uploading Task Guide
 ***
 * After Docker command `docker-compose up -d --build` successful run 
@@ -151,13 +168,13 @@ Type new username and password (on POST command JSON body) to register new user 
 
 **Note: I guess the JWT tokens must be saved in the front end side, not in backend side.**
 
-* Then open/click **`Upload`** `POST` command/endpoint to upload the Excel file _(see example)_.
+* Then open/click **`Upload`** `POST` command/endpoint to upload the Excel file **_(see example)_**.
 **Excel file must have only 3 columns Name, Phone Number, Email Address**
 After uploading a completed open ADMIN panel and in the database you can see uploaded file 
 contacts info in the `Contacs` table.
 
 * To see the original excel file on S3 bucket, please open/click **`User Uploaded Files`** `GET` command/endpoint 
-and put the username in the path variable _(see example)_ then click the `send` button on Postman.
+and put the username in the path variable _(http://localhost:8000/api/v1/**username**/uploaded_files)_ _(see example)_ then click the `send` button on Postman.
 In response you can see the original excel file location path on your S3 bucket.
 By clicking on that url you can find your original file on S3 bucket.
 

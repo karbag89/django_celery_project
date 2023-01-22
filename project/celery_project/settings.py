@@ -39,7 +39,6 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "celery_app",
     "rest_framework",
-    "django_celery_results",
     "corsheaders",
     "storages"
 ]
